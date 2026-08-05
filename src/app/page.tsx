@@ -26,7 +26,7 @@ export default function Home() {
   const [selectedResourceId, setSelectedResourceId] = useState<string>('')
   const [bookings, setBookings] = useState<Booking[]>([])
 
-  // Modal y Formulario
+  // Modal para Crear Reserva
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [userName, setUserName] = useState('')
   const [userEmail, setUserEmail] = useState('')
@@ -35,6 +35,12 @@ export default function Home() {
   const [endHour, setEndHour] = useState(9)
   const [errorMsg, setErrorMsg] = useState('')
   const [statusMsg, setStatusMsg] = useState('Cargando recursos...')
+
+  // Modal para Cancelación con Código
+  const [cancelBookingTarget, setCancelBookingTarget] = useState<Booking | null>(null)
+  const [cancelCodeInput, setCancelCodeInput] = useState('')
+  const [cancelState, setCancelState] = useState<'sending' | 'code_sent' | 'confirming'>('sending')
+  const [cancelErrorMsg, setCancelErrorMsg] = useState('')
 
   useEffect(() => {
     async function loadResources() {
@@ -73,7 +79,7 @@ export default function Home() {
     }
   }, [selectedResourceId])
 
-  // Función para enviar correos llamando a nuestra API
+  // Función para enviar notificación básica de creación
   const sendEmailNotification = async (to: string, subject: string, message: string) => {
     try {
       await fetch('/api/notify', {
@@ -125,7 +131,6 @@ export default function Home() {
     } else {
       setIsModalOpen(false)
 
-      // Notificar por correo
       const dateFormatted = start.toLocaleDateString('es-ES')
       const timeFormatted = `${startHour}:00 a ${endHour}:00`
       await sendEmailNotification(
@@ -146,39 +151,63 @@ export default function Home() {
     }
   }
 
-  // 2. Cancelar Reserva
-  const handleCancelBooking = async (booking: Booking) => {
-    const confirmCancel = window.confirm(
-      `¿Estás seguro de que deseas cancelar la reserva de ${booking.user_name}?`
-    )
+  // 2. Iniciar proceso de Cancelación (Enviar Código por Correo)
+  const handleStartCancelProcess = async (booking: Booking) => {
+    setCancelBookingTarget(booking)
+    setCancelCodeInput('')
+    setCancelErrorMsg('')
+    setCancelState('sending')
 
-    if (!confirmCancel) return
+    try {
+      const res = await fetch('/api/request-cancellation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: booking.id }),
+      })
 
-    const { error } = await supabase.from('bookings').delete().eq('id', booking.id)
+      const data = await res.json()
 
-    if (error) {
-      alert('Error al cancelar la reserva: ' + error.message)
-    } else {
-      const currentResource = resources.find((r) => r.id === selectedResourceId)
-      const start = new Date(booking.start_time)
-      const end = new Date(booking.end_time)
-
-      // Notificar cancelación por correo si tenía email registrado
-      if (booking.user_email) {
-        await sendEmailNotification(
-          booking.user_email,
-          ' Cancelación de Reserva - Laboratorio',
-          `<p>Hola <strong>${booking.user_name}</strong>,</p>
-           <p>Tu reserva ha sido cancelada:</p>
-           <ul>
-             <li><strong>Recurso:</strong> ${currentResource?.name}</li>
-             <li><strong>Fecha:</strong> ${start.toLocaleDateString('es-ES')}</li>
-             <li><strong>Horario:</strong> ${start.getHours()}:00 a ${end.getHours()}:00</li>
-           </ul>`
-        )
+      if (!res.ok) {
+        setCancelErrorMsg(data.error || 'Error al solicitar el código')
+      } else {
+        setCancelState('code_sent')
       }
+    } catch (err: any) {
+      setCancelErrorMsg('Error al conectar con el servidor.')
+    }
+  }
 
-      loadBookingsForSelected(selectedResourceId)
+  // 3. Validar Código e Ingresar Cancelación
+  const handleConfirmCancelWithCode = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!cancelBookingTarget || !cancelCodeInput) return
+
+    setCancelErrorMsg('')
+    setCancelState('confirming')
+
+    try {
+      const res = await fetch('/api/confirm-cancellation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bookingId: cancelBookingTarget.id,
+          code: cancelCodeInput,
+        }),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        setCancelErrorMsg(data.error || 'Código incorrecto')
+        setCancelState('code_sent')
+      } else {
+        alert(' La reserva ha sido cancelada exitosamente.')
+        setCancelBookingTarget(null)
+        loadBookingsForSelected(selectedResourceId)
+      }
+    } catch (err: any) {
+      setCancelErrorMsg('Error de conexión.')
+      setCancelState('code_sent')
     }
   }
 
@@ -225,7 +254,7 @@ export default function Home() {
           </select>
         </div>
 
-        {/* Lista de Reservas Activas */}
+        {/* Lista de Reservas Activas (Sin mostrar correo) */}
         <div className="bg-white p-6 rounded-xl shadow-sm border space-y-4">
           <h2 className="text-lg font-bold text-gray-800">Reservas Activas para este recurso</h2>
           {bookings.length === 0 ? (
@@ -239,7 +268,6 @@ export default function Home() {
                 >
                   <div>
                     <div className="font-semibold text-blue-950">{b.user_name}</div>
-                    <div className="text-xs text-blue-600">{b.user_email || 'Sin email'}</div>
                     <div className="text-xs text-gray-600 mt-1">
                       📅 {new Date(b.start_time).toLocaleDateString('es-ES')} | ⏰ {' '}
                       {new Date(b.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {' '}
@@ -247,7 +275,7 @@ export default function Home() {
                     </div>
                   </div>
                   <button
-                    onClick={() => handleCancelBooking(b)}
+                    onClick={() => handleStartCancelProcess(b)}
                     className="self-start sm:self-center px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 font-medium text-xs rounded-md border border-red-200 transition"
                   >
                     Cancelar Reserva
@@ -279,7 +307,7 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-600">Correo Electrónico (para notificaciones)</label>
+                <label className="block text-xs font-semibold text-gray-600">Correo Electrónico (para código de cancelación)</label>
                 <input
                   type="email"
                   value={userEmail}
@@ -339,6 +367,65 @@ export default function Home() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para Validar Código de Cancelación */}
+      {cancelBookingTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 space-y-4 shadow-xl">
+            <h3 className="text-xl font-bold text-gray-900">Cancelar Reserva</h3>
+            <p className="text-sm text-gray-600">
+              Reserva de <strong>{cancelBookingTarget.user_name}</strong>
+            </p>
+
+            {cancelErrorMsg && (
+              <div className="p-3 bg-red-100 text-red-700 rounded-lg text-sm">{cancelErrorMsg}</div>
+            )}
+
+            {cancelState === 'sending' && (
+              <div className="p-4 bg-blue-50 text-blue-800 rounded-lg text-sm text-center font-medium animate-pulse">
+                📨 Enviando código de verificación al correo registrado...
+              </div>
+            )}
+
+            {(cancelState === 'code_sent' || cancelState === 'confirming') && (
+              <form onSubmit={handleConfirmCancelWithCode} className="space-y-4">
+                <p className="text-xs text-gray-500">
+                  Hemos enviado un código de 6 dígitos al correo electrónico registrado para esta reserva. Ingrésalo a continuación para confirmar:
+                </p>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600">Código de 6 dígitos</label>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={cancelCodeInput}
+                    onChange={(e) => setCancelCodeInput(e.target.value)}
+                    placeholder="Ej: 123456"
+                    className="w-full p-3 border rounded-lg text-center text-lg tracking-widest font-bold mt-1"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setCancelBookingTarget(null)}
+                    className="px-4 py-2 border rounded-lg text-sm"
+                  >
+                    Cerrar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={cancelState === 'confirming' || cancelCodeInput.length !== 6}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm disabled:bg-gray-300"
+                  >
+                    {cancelState === 'confirming' ? 'Verificando...' : 'Confirmar Cancelación'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
