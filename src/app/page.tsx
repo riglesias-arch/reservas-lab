@@ -221,8 +221,8 @@ export default function Home() {
       <div className="max-w-4xl mx-auto space-y-6">
         <header className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Sistema de Reservas del Laboratorio</h1>
-            <p className="text-sm text-gray-500">Gestión de espacios y equipos</p>
+            <h1 className="text-2xl font-bold text-gray-900">RECURSOS - Labs 5, 6, 7 y 12</h1>
+            <p className="text-sm text-gray-500">Reserva de espacios y equipos</p>
           </div>
           <button
             onClick={() => setIsModalOpen(true)}
