@@ -64,12 +64,17 @@ export default function Home() {
     loadResources()
   }, [])
 
+  // Cargar únicamente reservas cuya hora de fin sea posterior o igual a la hora actual
   const loadBookingsForSelected = async (resourceId: string) => {
+    const nowISO = new Date().toISOString()
+
     const { data } = await supabase
       .from('bookings')
       .select('*')
       .eq('resource_id', resourceId)
+      .gte('end_time', nowISO) // <-- FILTRO DE FECHAS Y HORAS PASADAS
       .order('start_time', { ascending: true })
+
     if (data) setBookings(data)
   }
 
@@ -254,11 +259,11 @@ export default function Home() {
           </select>
         </div>
 
-        {/* Lista de Reservas Activas (Sin mostrar correo) */}
+        {/* Lista de Reservas Activas (Solo vigentes) */}
         <div className="bg-white p-6 rounded-xl shadow-sm border space-y-4">
-          <h2 className="text-lg font-bold text-gray-800">Reservas Activas para este recurso</h2>
+          <h2 className="text-lg font-bold text-gray-800">Reservas Activas y Futuras</h2>
           {bookings.length === 0 ? (
-            <p className="text-sm text-gray-500">No hay reservas registradas aún para este recurso.</p>
+            <p className="text-sm text-gray-500">No hay reservas activas registradas para este recurso.</p>
           ) : (
             <div className="space-y-3">
               {bookings.map((b) => (
