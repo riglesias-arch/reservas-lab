@@ -13,6 +13,7 @@ interface Booking {
   id: string
   resource_id: string
   user_name: string
+  user_email: string
   start_time: string
   end_time: string
 }
@@ -28,55 +29,70 @@ export default function Home() {
   // Modal y Formulario
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [userName, setUserName] = useState('')
+  const [userEmail, setUserEmail] = useState('')
   const [bookingDate, setBookingDate] = useState('')
   const [startHour, setStartHour] = useState(8)
   const [endHour, setEndHour] = useState(9)
   const [errorMsg, setErrorMsg] = useState('')
-  const [statusMsg, setStatusMsg] = useState('Cargando recursos desde Supabase...')
+  const [statusMsg, setStatusMsg] = useState('Cargando recursos...')
 
   useEffect(() => {
     async function loadResources() {
       try {
         const { data, error } = await supabase.from('resources').select('*')
-        
         if (error) {
-          setStatusMsg(`Error de conexión con Supabase: ${error.message}`)
+          setStatusMsg(`Error de conexión: ${error.message}`)
           return
         }
-
         if (!data || data.length === 0) {
-          setStatusMsg('Conexión exitosa, pero la tabla "resources" está vacía en Supabase.')
+          setStatusMsg('La tabla de recursos está vacía.')
           return
         }
-
         setResources(data)
         setSelectedResourceId(data[0].id)
-        setStatusMsg('') // Limpiar si todo estuvo bien
+        setStatusMsg('')
       } catch (err: any) {
-        setStatusMsg(`Error inesperado: ${err.message || 'Verifica el archivo .env.local'}`)
+        setStatusMsg(`Error inesperado: ${err.message}`)
       }
     }
     loadResources()
   }, [])
 
+  const loadBookingsForSelected = async (resourceId: string) => {
+    const { data } = await supabase
+      .from('bookings')
+      .select('*')
+      .eq('resource_id', resourceId)
+      .order('start_time', { ascending: true })
+    if (data) setBookings(data)
+  }
+
   useEffect(() => {
-    if (!selectedResourceId) return
-    async function loadBookings() {
-      const { data } = await supabase
-        .from('bookings')
-        .select('*')
-        .eq('resource_id', selectedResourceId)
-      if (data) setBookings(data)
+    if (selectedResourceId) {
+      loadBookingsForSelected(selectedResourceId)
     }
-    loadBookings()
   }, [selectedResourceId])
 
+  // Función para enviar correos llamando a nuestra API
+  const sendEmailNotification = async (to: string, subject: string, message: string) => {
+    try {
+      await fetch('/api/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to, subject, message }),
+      })
+    } catch (e) {
+      console.error('Error al enviar correo:', e)
+    }
+  }
+
+  // 1. Crear Reserva
   const handleCreateBooking = async (e: React.FormEvent) => {
     e.preventDefault()
     setErrorMsg('')
 
-    if (!userName || !bookingDate) {
-      setErrorMsg('Por favor completa todos los campos.')
+    if (!userName || !userEmail || !bookingDate) {
+      setErrorMsg('Por favor completa todos los campos (Nombre, Email y Fecha).')
       return
     }
 
@@ -88,10 +104,13 @@ export default function Home() {
       return
     }
 
+    const currentResource = resources.find((r) => r.id === selectedResourceId)
+
     const { error } = await supabase.from('bookings').insert([
       {
         resource_id: selectedResourceId,
         user_name: userName,
+        user_email: userEmail,
         start_time: start.toISOString(),
         end_time: end.toISOString(),
       },
@@ -105,12 +124,61 @@ export default function Home() {
       }
     } else {
       setIsModalOpen(false)
+
+      // Notificar por correo
+      const dateFormatted = start.toLocaleDateString('es-ES')
+      const timeFormatted = `${startHour}:00 a ${endHour}:00`
+      await sendEmailNotification(
+        userEmail,
+        ' Confirmación de Reserva - Laboratorio',
+        `<p>Hola <strong>${userName}</strong>,</p>
+         <p>Tu reserva ha sido confirmada con éxito:</p>
+         <ul>
+           <li><strong>Recurso:</strong> ${currentResource?.name}</li>
+           <li><strong>Fecha:</strong> ${dateFormatted}</li>
+           <li><strong>Horario:</strong> ${timeFormatted}</li>
+         </ul>`
+      )
+
       setUserName('')
-      const { data } = await supabase
-        .from('bookings')
-        .select('*')
-        .eq('resource_id', selectedResourceId)
-      if (data) setBookings(data)
+      setUserEmail('')
+      loadBookingsForSelected(selectedResourceId)
+    }
+  }
+
+  // 2. Cancelar Reserva
+  const handleCancelBooking = async (booking: Booking) => {
+    const confirmCancel = window.confirm(
+      `¿Estás seguro de que deseas cancelar la reserva de ${booking.user_name}?`
+    )
+
+    if (!confirmCancel) return
+
+    const { error } = await supabase.from('bookings').delete().eq('id', booking.id)
+
+    if (error) {
+      alert('Error al cancelar la reserva: ' + error.message)
+    } else {
+      const currentResource = resources.find((r) => r.id === selectedResourceId)
+      const start = new Date(booking.start_time)
+      const end = new Date(booking.end_time)
+
+      // Notificar cancelación por correo si tenía email registrado
+      if (booking.user_email) {
+        await sendEmailNotification(
+          booking.user_email,
+          ' Cancelación de Reserva - Laboratorio',
+          `<p>Hola <strong>${booking.user_name}</strong>,</p>
+           <p>Tu reserva ha sido cancelada:</p>
+           <ul>
+             <li><strong>Recurso:</strong> ${currentResource?.name}</li>
+             <li><strong>Fecha:</strong> ${start.toLocaleDateString('es-ES')}</li>
+             <li><strong>Horario:</strong> ${start.getHours()}:00 a ${end.getHours()}:00</li>
+           </ul>`
+        )
+      }
+
+      loadBookingsForSelected(selectedResourceId)
     }
   }
 
@@ -130,7 +198,6 @@ export default function Home() {
           </button>
         </header>
 
-        {/* Banner de Estado / Errores */}
         {statusMsg && (
           <div className="p-4 bg-amber-50 text-amber-800 border border-amber-200 rounded-xl text-sm font-medium">
             {statusMsg}
@@ -158,21 +225,33 @@ export default function Home() {
           </select>
         </div>
 
-        {/* Lista de Reservas Actuales */}
+        {/* Lista de Reservas Activas */}
         <div className="bg-white p-6 rounded-xl shadow-sm border space-y-4">
           <h2 className="text-lg font-bold text-gray-800">Reservas Activas para este recurso</h2>
           {bookings.length === 0 ? (
             <p className="text-sm text-gray-500">No hay reservas registradas aún para este recurso.</p>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-3">
               {bookings.map((b) => (
-                <div key={b.id} className="p-3 bg-blue-50 border border-blue-100 rounded-lg flex justify-between text-sm">
-                  <span className="font-semibold text-blue-900">{b.user_name}</span>
-                  <span className="text-blue-700">
-                    {new Date(b.start_time).toLocaleDateString('es-ES')} | {' '}
-                    {new Date(b.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {' '}
-                    {new Date(b.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
+                <div
+                  key={b.id}
+                  className="p-4 bg-blue-50 border border-blue-100 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-sm"
+                >
+                  <div>
+                    <div className="font-semibold text-blue-950">{b.user_name}</div>
+                    <div className="text-xs text-blue-600">{b.user_email || 'Sin email'}</div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      📅 {new Date(b.start_time).toLocaleDateString('es-ES')} | ⏰ {' '}
+                      {new Date(b.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {' '}
+                      {new Date(b.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleCancelBooking(b)}
+                    className="self-start sm:self-center px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 font-medium text-xs rounded-md border border-red-200 transition"
+                  >
+                    Cancelar Reserva
+                  </button>
                 </div>
               ))}
             </div>
@@ -182,7 +261,7 @@ export default function Home() {
 
       {/* Modal para Crear Reserva */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl max-w-md w-full p-6 space-y-4 shadow-xl">
             <h3 className="text-xl font-bold">Hacer una Reserva</h3>
             {errorMsg && <div className="p-3 bg-red-100 text-red-700 rounded-lg text-sm">{errorMsg}</div>}
@@ -195,6 +274,17 @@ export default function Home() {
                   value={userName}
                   onChange={(e) => setUserName(e.target.value)}
                   placeholder="Ej: Dra. María Gómez"
+                  className="w-full p-2 border rounded-lg text-sm mt-1"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-600">Correo Electrónico (para notificaciones)</label>
+                <input
+                  type="email"
+                  value={userEmail}
+                  onChange={(e) => setUserEmail(e.target.value)}
+                  placeholder="ejemplo@laboratorio.com"
                   className="w-full p-2 border rounded-lg text-sm mt-1"
                 />
               </div>
